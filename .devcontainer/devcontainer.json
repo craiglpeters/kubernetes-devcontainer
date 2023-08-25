@@ -14,7 +14,7 @@
 	// "hack/verify-typecheck.sh" test requires more CPUs, ensure you have larger machine type (e.g. 16 cores) to pass this test
 	"hostRequirements": {
 		"cpus": 4,
-		"storage": "64gb"
+		"storage": "32gb"
 	},
 	
 	// Copy over welcome message and install pyyaml
