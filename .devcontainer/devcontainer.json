@@ -1,10 +1,37 @@
-// For format details, see https://containers.dev
+// For format details, see https:https://containers.dev/implementors/spec/. For config options, see the README at:
+// https://github.com/devcontainers/images/tree/main/src/base-debian
 {
-    "name": "Kubernetes environment from dev container",
+	"name": "Kubernetes dev environment",
+	
+	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
 
-    // Image to pull when not building from scratch. See .devcontainer/build/devcontainer.json 
-    // and .github/devcontainer-build-and-push.yml for the instructions on how this image is built
-    "image": "ghcr.io/craiglpeters/kubernetes-devcontainer:latest",
+	// Install utils, go, docker-in-docker, and other tools
+	// For more info about dev container Features see https://containers.dev/features
+	"features": {
+		// Install go. 
+		// TO DO: read the version from ~.go-version
+		"ghcr.io/devcontainers/features/go:1": {
+			"version": "latest",
+			"username": "root"
+		},
+		// Install kubectl, but skip minikube and helm
+		"ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+			"version": "latest",
+			"helm": "none",
+			"minikube": "none"
+		},
+		// Enable running docker in docker, sshd, and the github-cli
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/devcontainers/features/sshd:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		// Install Python which is required for some k/k/hack tools
+		"ghcr.io/devcontainers/features/python:1": {},
+		
+		// TO DO: move these features from local to their projects, and publish them
+		"./local-features/kubectl-kind": {},
+		"./local-features/etcd": {},
+		"./local-features/kubetest2": {}
+	},
 
 	// Setup the go environment and mount into the dev container at the expected location
 	"workspaceFolder": "/go/src/k8s.io/kubernetes",
@@ -19,7 +46,7 @@
 	// Copy over welcome message and install pyyaml
 	"onCreateCommand": "bash .devcontainer/setup.sh",
 
-	// for Kubernetes testing, suppress extraneous forwarding messages
+	// For kubetest2 testing, suppress extraneous forwarding messages
 	"otherPortsAttributes": {
 		"onAutoForward": "silent"
 	},
