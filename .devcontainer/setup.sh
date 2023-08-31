@@ -16,7 +16,6 @@
 
 set -eux
 
-
 # Copy over welcome message that shows up in the default terminal
 echo "Copying the first-run-notice" && cp .devcontainer/welcome-message.txt /usr/local/etc/vscode-dev-containers/first-run-notice.txt
 
