@@ -1,6 +1,6 @@
 // For format details, see https://containers.dev
 {
-    "name": "Kubernetes environment from dev container",
+    "name": "Kubernetes environment from kube-cross-based dev container",
 
     // Image to pull when not building from scratch. See .devcontainer/build/devcontainer.json 
     // and .github/devcontainer-build-and-push.yml for the instructions on how this image is built
