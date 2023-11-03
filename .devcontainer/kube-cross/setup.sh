@@ -17,6 +17,7 @@
 set -eux
 
 # Install pyyaml as required by verify.publishing-bot
+sudo apt install python3-pip
 python3 -m pip install --user --upgrade --no-cache-dir pyyaml
 
 # Copies over welcome message
