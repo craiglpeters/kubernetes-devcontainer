@@ -17,7 +17,7 @@
 	},
 	
 	// Copy over welcome message and install pyyaml
-	"onCreateCommand": "bash .devcontainer/setup.sh",
+	"onCreateCommand": "bash .devcontainer/kube-cross/setup.sh",
 
 	// for Kubernetes testing, suppress extraneous forwarding messages
 	"otherPortsAttributes": {
