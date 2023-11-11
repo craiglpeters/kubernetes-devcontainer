@@ -13,7 +13,8 @@
     // Ensure that the host machine has enough resources to build and test Kubernetes
 	// "hack/verify-typecheck.sh" test requires more CPUs, ensure you have larger machine type (e.g. 16 cores) to pass this test
 	"hostRequirements": {
-		"cpus": 4
+		"cpus": 4,
+		"storage": "32gb"
 	},
 	
 	// Copy over welcome message and install pyyaml
