@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 
 	"github.com/onsi/ginkgo/v2"
@@ -58,7 +59,7 @@ var _ = SIGDescribe("Kubelet", func() {
 					RestartPolicy: v1.RestartPolicyNever,
 					Containers: []v1.Container{
 						{
-							Image:   framework.BusyBoxImage,
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
 							Name:    podName,
 							Command: []string{"sh", "-c", "echo 'Hello World' ; sleep 240"},
 						},
@@ -92,7 +93,7 @@ var _ = SIGDescribe("Kubelet", func() {
 					RestartPolicy: v1.RestartPolicyNever,
 					Containers: []v1.Container{
 						{
-							Image:   framework.BusyBoxImage,
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
 							Name:    podName,
 							Command: []string{"/bin/false"},
 						},
@@ -191,7 +192,7 @@ var _ = SIGDescribe("Kubelet", func() {
 					RestartPolicy: v1.RestartPolicyNever,
 					Containers: []v1.Container{
 						{
-							Image:   framework.BusyBoxImage,
+							Image:   imageutils.GetE2EImage(imageutils.BusyBox),
 							Name:    podName,
 							Command: []string{"/bin/sh", "-c", "echo test > /file; sleep 240"},
 							SecurityContext: &v1.SecurityContext{
@@ -211,6 +212,51 @@ var _ = SIGDescribe("Kubelet", func() {
 				buf.ReadFrom(rc)
 				return buf.String()
 			}, time.Minute, time.Second*4).Should(gomega.Equal("/bin/sh: can't create /file: Read-only file system\n"))
+		})
+	})
+})
+
+var _ = SIGDescribe("Kubelet with pods in a privileged namespace", func() {
+	f := framework.NewDefaultFramework("kubelet-test")
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
+	var podClient *e2epod.PodClient
+	ginkgo.BeforeEach(func() {
+		podClient = e2epod.NewPodClient(f)
+	})
+	ginkgo.Context("when scheduling an agnhost Pod with hostAliases and hostNetwork", func() {
+		podName := "agnhost-host-aliases" + string(uuid.NewUUID())
+		/*
+			Release: v1.30
+			Testname: Kubelet, hostAliases, hostNetwork
+			Description: Create a Pod with hostNetwork enabled, hostAliases and a container with command to output /etc/hosts entries. Pod's logs MUST have matching entries of specified hostAliases to the output of /etc/hosts entries.
+		*/
+		framework.It("should write entries to /etc/hosts when hostNetwork is enabled", f.WithNodeConformance(), func(ctx context.Context) {
+			pod := e2epod.NewAgnhostPod(f.Namespace.Name, podName, nil, nil, nil, "etc-hosts")
+			pod.Spec.HostNetwork = true
+			// Don't restart the Pod since it is expected to exit
+			pod.Spec.RestartPolicy = v1.RestartPolicyNever
+			pod.Spec.HostAliases = []v1.HostAlias{
+				{
+					IP:        "123.45.67.89",
+					Hostnames: []string{"foo", "bar"},
+				},
+			}
+
+			pod = podClient.Create(ctx, pod)
+			ginkgo.By("Waiting for pod completion")
+			err := e2epod.WaitForPodNoLongerRunningInNamespace(ctx, f.ClientSet, pod.Name, f.Namespace.Name)
+			framework.ExpectNoError(err)
+
+			rc, err := podClient.GetLogs(podName, &v1.PodLogOptions{}).Stream(ctx)
+			framework.ExpectNoError(err)
+			defer rc.Close() // nolint:errcheck
+			buf := new(bytes.Buffer)
+			_, err = buf.ReadFrom(rc)
+			framework.ExpectNoError(err)
+			hostsFileContent := buf.String()
+
+			errMsg := fmt.Sprintf("expected hosts file to contain entries from HostAliases. Got:\n%+v", hostsFileContent)
+			gomega.Expect(hostsFileContent).To(gomega.ContainSubstring("123.45.67.89\tfoo\tbar"), errMsg)
 		})
 	})
 })

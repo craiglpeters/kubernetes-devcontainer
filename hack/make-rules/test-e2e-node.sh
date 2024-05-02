@@ -33,7 +33,7 @@ skip=${SKIP-"\[Flaky\]|\[Slow\]|\[Serial\]"}
 # The number of tests that can run in parallel depends on what tests
 # are running and on the size of the node. Too many, and tests will
 # fail due to resource contention. 8 is a reasonable default for a
-# n1-standard-1 node.
+# e2-standard-2 node.
 # Currently, parallelism only affects when REMOTE=true. For local test,
 # ginkgo default parallelism (cores - 1) is used.
 parallelism=${PARALLELISM:-8}
@@ -52,6 +52,18 @@ ssh_user=${SSH_USER:-"${USER}"}
 ssh_key=${SSH_KEY:-}
 ssh_options=${SSH_OPTIONS:-}
 kubelet_config_file=${KUBELET_CONFIG_FILE:-"test/e2e_node/jenkins/default-kubelet-config.yaml"}
+
+# If set, the command executed will be:
+# - `dlv exec` if set to "delve"
+# - `gdb` if set to "gdb"
+# NOTE: for this to work the e2e_node.test binary has to be compiled with DBG=1.
+#
+# The name of this variable is the same as in ginkgo-e2e.sh.
+debug_tool=${E2E_TEST_DEBUG_TOOL:-}
+if [ "${remote}" = true ] && [ -n "${debug_tool}" ]; then
+    echo "Support for E2E_TEST_DEBUG_TOOL=${debug_tool} is only implemented for REMOTE=false."
+    exit 1
+fi
 
 # Parse the flags to pass to ginkgo
 ginkgoflags="-timeout=24h"
@@ -247,6 +259,7 @@ else
   # Test using the host the script was run on
   # Provided for backwards compatibility
   go run test/e2e_node/runner/local/run_local.go \
+    --debug-tool="${debug_tool}" \
     --system-spec-name="${system_spec_name}" --extra-envs="${extra_envs}" \
     --ginkgo-flags="${ginkgoflags}" \
     --test-flags="--v 4 --report-dir=${artifacts} --node-name $(hostname) ${test_args}" \

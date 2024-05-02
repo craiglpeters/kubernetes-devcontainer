@@ -39,6 +39,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eevents "k8s.io/kubernetes/test/e2e/framework/events"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	"k8s.io/kubernetes/test/e2e/nodefeature"
 	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
@@ -611,7 +612,7 @@ done
 		})
 
 		// verify pods are running and ready
-		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, 0, f.Timeouts.PodStart)
+		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, f.Timeouts.PodStart)
 		framework.ExpectNoError(err)
 
 		// Shutdown pod. Readiness should change to false
@@ -693,7 +694,7 @@ done
 		})
 
 		// verify pods are running and ready
-		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, 0, f.Timeouts.PodStart)
+		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, f.Timeouts.PodStart)
 		framework.ExpectNoError(err)
 
 		// Shutdown pod. Readiness should change to false
@@ -729,7 +730,7 @@ done
 	})
 })
 
-var _ = SIGDescribe("[NodeAlphaFeature:SidecarContainers]", feature.SidecarContainers, "Probing restartable init container", func() {
+var _ = SIGDescribe(nodefeature.SidecarContainers, feature.SidecarContainers, "Probing restartable init container", func() {
 	f := framework.NewDefaultFramework("container-probe")
 	f.NamespacePodSecurityLevel = admissionapi.LevelBaseline
 	var podClient *e2epod.PodClient
@@ -1358,7 +1359,7 @@ done
 		})
 
 		// verify pods are running and ready
-		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, 0, f.Timeouts.PodStart)
+		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, f.Timeouts.PodStart)
 		framework.ExpectNoError(err)
 
 		// Shutdown pod. Readiness should change to false
@@ -1451,7 +1452,7 @@ done
 		})
 
 		// verify pods are running and ready
-		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, 0, f.Timeouts.PodStart)
+		err := e2epod.WaitForPodsRunningReady(ctx, f.ClientSet, f.Namespace.Name, 1, f.Timeouts.PodStart)
 		framework.ExpectNoError(err)
 
 		// Shutdown pod. Readiness should change to false

@@ -1,3 +1,6 @@
+//go:build !providerless
+// +build !providerless
+
 /*
 Copyright 2016 The Kubernetes Authors.
 
@@ -296,21 +299,21 @@ var _ = common.SIGDescribe("LoadBalancers", func() {
 		framework.Logf("service port TCP: %d", svcPort)
 
 		ginkgo.By("hitting the TCP service's LoadBalancer")
-		e2eservice.TestReachableHTTP(ctx, tcpIngressIP, svcPort, loadBalancerCreateTimeout)
+		e2eservice.TestReachableHTTP(ctx, tcpIngressIP, svcPort, loadBalancerLagTimeout)
 
 		ginkgo.By("Scaling the pods to 0")
 		err = tcpJig.Scale(ctx, 0)
 		framework.ExpectNoError(err)
 
-		ginkgo.By("looking for ICMP REJECT on the TCP service's LoadBalancer")
-		testRejectedHTTP(tcpIngressIP, svcPort, loadBalancerCreateTimeout)
+		ginkgo.By("hitting the TCP service's LoadBalancer with no backends, no answer expected")
+		testNotReachableHTTP(tcpIngressIP, svcPort, loadBalancerLagTimeout)
 
 		ginkgo.By("Scaling the pods to 1")
 		err = tcpJig.Scale(ctx, 1)
 		framework.ExpectNoError(err)
 
 		ginkgo.By("hitting the TCP service's LoadBalancer")
-		e2eservice.TestReachableHTTP(ctx, tcpIngressIP, svcPort, loadBalancerCreateTimeout)
+		e2eservice.TestReachableHTTP(ctx, tcpIngressIP, svcPort, loadBalancerLagTimeout)
 
 		// Change the services back to ClusterIP.
 
@@ -609,7 +612,7 @@ var _ = common.SIGDescribe("LoadBalancers", func() {
 	})
 
 	f.It("should be able to create an internal type load balancer", f.WithSlow(), func(ctx context.Context) {
-		e2eskipper.SkipUnlessProviderIs("azure", "gke", "gce")
+		e2eskipper.SkipUnlessProviderIs("gke", "gce")
 
 		createTimeout := e2eservice.GetServiceLoadBalancerCreationTimeout(ctx, cs)
 		pollInterval := framework.Poll * 10

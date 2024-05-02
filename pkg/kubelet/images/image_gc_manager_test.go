@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -172,7 +172,7 @@ func TestDetectImagesInitialDetect(t *testing.T) {
 }
 
 func TestDetectImagesInitialDetectWithRuntimeHandlerInImageCriAPIFeatureGate(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.RuntimeClassInImageCriAPI, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.RuntimeClassInImageCriAPI, true)
 	testRuntimeHandler := "test-runtimeHandler"
 	ctx := context.Background()
 	mockCtrl := gomock.NewController(t)
@@ -516,6 +516,41 @@ func TestDeleteUnusedImagesRemoveAllUnusedImages(t *testing.T) {
 	assert.Len(fakeRuntime.ImageList, 1)
 }
 
+func TestDeleteUnusedImagesLimitByImageLiveTime(t *testing.T) {
+	ctx := context.Background()
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	mockStatsProvider := statstest.NewMockProvider(mockCtrl)
+
+	manager, fakeRuntime := newRealImageGCManager(ImageGCPolicy{
+		MinAge: time.Second * 3, // set minAge to 3 seconds,
+	}, mockStatsProvider)
+	fakeRuntime.ImageList = []container.Image{
+		makeImage(0, 1024),
+		makeImage(1, 2048),
+		makeImage(2, 2048),
+	}
+	fakeRuntime.AllPodList = []*containertest.FakePod{
+		{Pod: &container.Pod{
+			Containers: []*container.Container{
+				makeContainer(2),
+			},
+		}},
+	}
+	// start to detect images
+	manager.Start()
+	// try to delete images, but images are not old enough,so no image will be deleted
+	err := manager.DeleteUnusedImages(ctx)
+	assert := assert.New(t)
+	require.NoError(t, err)
+	assert.Len(fakeRuntime.ImageList, 3)
+	// sleep 3 seconds, then images will be old enough to be deleted
+	time.Sleep(time.Second * 3)
+	err = manager.DeleteUnusedImages(ctx)
+	require.NoError(t, err)
+	assert.Len(fakeRuntime.ImageList, 1)
+}
+
 func TestFreeSpaceRemoveByLeastRecentlyUsed(t *testing.T) {
 	ctx := context.Background()
 	mockCtrl := gomock.NewController(t)
@@ -624,7 +659,7 @@ func TestGarbageCollectBelowLowThreshold(t *testing.T) {
 	}
 	mockStatsProvider.EXPECT().ImageFsStats(gomock.Any()).Return(imageStats, imageStats, nil)
 
-	assert.NoError(t, manager.GarbageCollect(ctx))
+	assert.NoError(t, manager.GarbageCollect(ctx, time.Now()))
 }
 
 func TestGarbageCollectCadvisorFailure(t *testing.T) {
@@ -639,7 +674,7 @@ func TestGarbageCollectCadvisorFailure(t *testing.T) {
 	manager, _ := newRealImageGCManager(policy, mockStatsProvider)
 
 	mockStatsProvider.EXPECT().ImageFsStats(gomock.Any()).Return(&statsapi.FsStats{}, &statsapi.FsStats{}, fmt.Errorf("error"))
-	assert.NotNil(t, manager.GarbageCollect(ctx))
+	assert.NotNil(t, manager.GarbageCollect(ctx, time.Now()))
 }
 
 func TestGarbageCollectBelowSuccess(t *testing.T) {
@@ -664,7 +699,7 @@ func TestGarbageCollectBelowSuccess(t *testing.T) {
 		makeImage(0, 450),
 	}
 
-	assert.NoError(t, manager.GarbageCollect(ctx))
+	assert.NoError(t, manager.GarbageCollect(ctx, time.Now()))
 }
 
 func TestGarbageCollectNotEnoughFreed(t *testing.T) {
@@ -688,7 +723,7 @@ func TestGarbageCollectNotEnoughFreed(t *testing.T) {
 		makeImage(0, 50),
 	}
 
-	assert.NotNil(t, manager.GarbageCollect(ctx))
+	assert.NotNil(t, manager.GarbageCollect(ctx, time.Now()))
 }
 
 func TestGarbageCollectImageNotOldEnough(t *testing.T) {
@@ -789,14 +824,15 @@ func TestGarbageCollectImageTooOld(t *testing.T) {
 
 	// First GC round should not GC remaining image, as it was used too recently.
 	assert := assert.New(t)
-	images, err = manager.freeOldImages(ctx, images, fakeClock.Now())
+	oldStartTime := fakeClock.Now()
+	images, err = manager.freeOldImages(ctx, images, oldStartTime, oldStartTime)
 	require.NoError(t, err)
 	assert.Len(images, 1)
 	assert.Len(fakeRuntime.ImageList, 2)
 
 	// move clock by a millisecond past maxAge duration, then 1 image will be garbage collected
 	fakeClock.Step(policy.MaxAge + 1)
-	images, err = manager.freeOldImages(ctx, images, fakeClock.Now())
+	images, err = manager.freeOldImages(ctx, images, fakeClock.Now(), oldStartTime)
 	require.NoError(t, err)
 	assert.Len(images, 0)
 	assert.Len(fakeRuntime.ImageList, 1)
@@ -844,8 +880,10 @@ func TestGarbageCollectImageMaxAgeDisabled(t *testing.T) {
 	require.Equal(t, len(images), 1)
 	assert.Len(fakeRuntime.ImageList, 2)
 
+	oldStartTime := fakeClock.Now()
+
 	// First GC round should not GC remaining image, as it was used too recently.
-	images, err = manager.freeOldImages(ctx, images, fakeClock.Now())
+	images, err = manager.freeOldImages(ctx, images, oldStartTime, oldStartTime)
 	require.NoError(t, err)
 	assert.Len(images, 1)
 	assert.Len(fakeRuntime.ImageList, 2)
@@ -853,7 +891,7 @@ func TestGarbageCollectImageMaxAgeDisabled(t *testing.T) {
 	// Move clock by a lot, and the images should continue to not be garbage colleced
 	// See https://stackoverflow.com/questions/25065055/what-is-the-maximum-time-time-in-go
 	fakeClock.SetTime(time.Unix(1<<63-62135596801, 999999999))
-	images, err = manager.freeOldImages(ctx, images, fakeClock.Now())
+	images, err = manager.freeOldImages(ctx, images, fakeClock.Now(), oldStartTime)
 	require.NoError(t, err)
 	assert.Len(images, 1)
 	assert.Len(fakeRuntime.ImageList, 2)

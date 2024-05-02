@@ -22,6 +22,8 @@ import (
 	"net"
 	"time"
 
+	"k8s.io/kubernetes/pkg/controller/nodeipam/ipam/cidrset"
+
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -76,7 +78,6 @@ const (
 )
 
 // nodePollInterval is used in listing node
-// This is a variable instead of a const to enable testing.
 var nodePollInterval = 10 * time.Second
 
 // CIDRAllocator is an interface implemented by things that know how
@@ -85,7 +86,7 @@ type CIDRAllocator interface {
 	// AllocateOrOccupyCIDR looks at the given node, assigns it a valid
 	// CIDR if it doesn't currently have one or mark the CIDR as used if
 	// the node already have one.
-	AllocateOrOccupyCIDR(logger klog.Logger, node *v1.Node) error
+	AllocateOrOccupyCIDR(ctx context.Context, node *v1.Node) error
 	// ReleaseCIDR releases the CIDR of the removed node.
 	ReleaseCIDR(logger klog.Logger, node *v1.Node) error
 	// Run starts all the working logic of the allocator.
@@ -105,38 +106,32 @@ type CIDRAllocatorParams struct {
 	NodeCIDRMaskSizes []int
 }
 
-// CIDRs are reserved, then node resource is patched with them.
-// nodeReservedCIDRs holds the reservation info for a node.
-type nodeReservedCIDRs struct {
-	allocatedCIDRs []*net.IPNet
-	nodeName       string
-}
-
 // New creates a new CIDR range allocator.
 func New(ctx context.Context, kubeClient clientset.Interface, cloud cloudprovider.Interface, nodeInformer informers.NodeInformer, allocatorType CIDRAllocatorType, allocatorParams CIDRAllocatorParams) (CIDRAllocator, error) {
-	logger := klog.FromContext(ctx)
-	nodeList, err := listNodes(logger, kubeClient)
+	nodeList, err := listNodes(ctx, kubeClient)
 	if err != nil {
 		return nil, err
 	}
 
 	switch allocatorType {
 	case RangeAllocatorType:
-		return NewCIDRRangeAllocator(logger, kubeClient, nodeInformer, allocatorParams, nodeList)
+		return NewCIDRRangeAllocator(ctx, kubeClient, nodeInformer, allocatorParams, nodeList)
 	case CloudAllocatorType:
-		return NewCloudCIDRAllocator(logger, kubeClient, cloud, nodeInformer)
+		return NewCloudCIDRAllocator(ctx, kubeClient, cloud, nodeInformer)
 	default:
 		return nil, fmt.Errorf("invalid CIDR allocator type: %v", allocatorType)
 	}
 }
 
-func listNodes(logger klog.Logger, kubeClient clientset.Interface) (*v1.NodeList, error) {
+func listNodes(ctx context.Context, kubeClient clientset.Interface) (*v1.NodeList, error) {
 	var nodeList *v1.NodeList
+	logger := klog.FromContext(ctx)
+
 	// We must poll because apiserver might not be up. This error causes
 	// controller manager to restart.
-	if pollErr := wait.Poll(nodePollInterval, apiserverStartupGracePeriod, func() (bool, error) {
+	if pollErr := wait.PollUntilContextTimeout(ctx, nodePollInterval, apiserverStartupGracePeriod, true, func(ctx context.Context) (bool, error) {
 		var err error
-		nodeList, err = kubeClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{
+		nodeList, err = kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
 			FieldSelector: fields.Everything().String(),
 			LabelSelector: labels.Everything().String(),
 		})
@@ -159,4 +154,15 @@ func ipnetToStringList(inCIDRs []*net.IPNet) []string {
 		outCIDRs[idx] = inCIDR.String()
 	}
 	return outCIDRs
+}
+
+// occupyServiceCIDR removes the service CIDR range from the cluster CIDR if it
+// intersects.
+func occupyServiceCIDR(set *cidrset.CidrSet, clusterCIDR, serviceCIDR *net.IPNet) error {
+	if clusterCIDR.Contains(serviceCIDR.IP) || serviceCIDR.Contains(clusterCIDR.IP) {
+		if err := set.Occupy(serviceCIDR); err != nil {
+			return err
+		}
+	}
+	return nil
 }

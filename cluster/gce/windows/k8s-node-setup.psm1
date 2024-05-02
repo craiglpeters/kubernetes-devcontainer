@@ -57,8 +57,8 @@ $GCE_METADATA_SERVER = "169.254.169.254"
 # exist until an initial HNS network has been created on the Windows node - see
 # Add_InitialHnsNetwork().
 $MGMT_ADAPTER_NAME = "vEthernet (Ethernet*"
-$CRICTL_VERSION = 'v1.28.0'
-$CRICTL_SHA256 = 'a9834db406eb0afd59fae200de04f62e52d5bd5507e6cce589c99fde5a23c149'
+$CRICTL_VERSION = 'v1.30.0'
+$CRICTL_SHA256 = '43d37d94c0dc03830c0988049537fc22fe4b0ad4273ec9066e03586dc8920eb0'
 
 Import-Module -Force C:\common.psm1
 

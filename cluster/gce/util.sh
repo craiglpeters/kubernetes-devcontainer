@@ -412,7 +412,7 @@ function detect-node-names() {
     for group in "${INSTANCE_GROUPS[@]}"; do
       kube::util::read-array NODE_NAMES < <(gcloud compute instance-groups managed list-instances \
         "${group}" --zone "${ZONE}" --project "${PROJECT}" \
-        --format='value(instance)')
+        --format='value(name)')
     done
   fi
   # Add heapster node name to the list too (if it exists).
@@ -425,7 +425,7 @@ function detect-node-names() {
     for group in "${WINDOWS_INSTANCE_GROUPS[@]}"; do
       kube::util::read-array WINDOWS_NODE_NAMES < <(gcloud compute instance-groups managed \
         list-instances "${group}" --zone "${ZONE}" --project "${PROJECT}" \
-        --format='value(instance)')
+        --format='value(name)')
     done
   fi
   export WINDOWS_NODE_NAMES
@@ -1211,6 +1211,8 @@ CONTAINER_RUNTIME_TEST_HANDLER: $(yaml-quote "${CONTAINER_RUNTIME_TEST_HANDLER:-
 CONTAINERD_INFRA_CONTAINER: $(yaml-quote "${CONTAINER_INFRA_CONTAINER:-}")
 UBUNTU_INSTALL_CONTAINERD_VERSION: $(yaml-quote "${UBUNTU_INSTALL_CONTAINERD_VERSION:-}")
 UBUNTU_INSTALL_RUNC_VERSION: $(yaml-quote "${UBUNTU_INSTALL_RUNC_VERSION:-}")
+COS_INSTALL_CONTAINERD_VERSION: $(yaml-quote "${COS_INSTALL_CONTAINERD_VERSION:-}")
+COS_INSTALL_RUNC_VERSION: $(yaml-quote "${COS_INSTALL_RUNC_VERSION:-}")
 NODE_LOCAL_SSDS_EXT: $(yaml-quote "${NODE_LOCAL_SSDS_EXT:-}")
 NODE_LOCAL_SSDS_EPHEMERAL: $(yaml-quote "${NODE_LOCAL_SSDS_EPHEMERAL:-}")
 LOAD_IMAGE_COMMAND: $(yaml-quote "${LOAD_IMAGE_COMMAND:-}")
@@ -1363,6 +1365,8 @@ KONNECTIVITY_SERVER_RUNASGROUP: 2008
 KONNECTIVITY_SERVER_SOCKET_WRITER_GROUP: 2008
 CLOUD_CONTROLLER_MANAGER_RUNASUSER: 2009
 CLOUD_CONTROLLER_MANAGER_RUNASGROUP: 2009
+CLUSTER_AUTOSCALER_RUNASUSER: 2010
+CLUSTER_AUTOSCALER_RUNASGROUP: 2010
 
 EOF
     # KUBE_APISERVER_REQUEST_TIMEOUT_SEC (if set) controls the --request-timeout

@@ -55,9 +55,6 @@ func NewController(
 	secondaryRange net.IPNet,
 	client clientset.Interface,
 ) *Controller {
-	broadcaster := record.NewBroadcaster()
-	recorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: controllerName})
-
 	c := &Controller{
 		client:   client,
 		interval: 10 * time.Second, // same as DefaultEndpointReconcilerInterval
@@ -79,11 +76,6 @@ func NewController(
 	c.serviceCIDRLister = networkingv1alpha1listers.NewServiceCIDRLister(c.serviceCIDRInformer.GetIndexer())
 	c.serviceCIDRsSynced = c.serviceCIDRInformer.HasSynced
 
-	c.eventBroadcaster = broadcaster
-	c.eventRecorder = recorder
-
-	c.readyCh = make(chan struct{})
-
 	return c
 }
 
@@ -99,15 +91,16 @@ type Controller struct {
 	serviceCIDRLister   networkingv1alpha1listers.ServiceCIDRLister
 	serviceCIDRsSynced  cache.InformerSynced
 
-	readyCh chan struct{} // channel to block until the default ServiceCIDR exists
-
 	interval time.Duration
 }
 
 // Start will not return until the default ServiceCIDR exists or stopCh is closed.
-func (c *Controller) Start(stopCh <-chan struct{}) {
+func (c *Controller) Start(ctx context.Context) {
 	defer utilruntime.HandleCrash()
+	stopCh := ctx.Done()
 
+	c.eventBroadcaster = record.NewBroadcaster(record.WithContext(ctx))
+	c.eventRecorder = c.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: controllerName})
 	c.eventBroadcaster.StartStructuredLogging(0)
 	c.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: c.client.CoreV1().Events("")})
 	defer c.eventBroadcaster.Shutdown()
@@ -120,28 +113,38 @@ func (c *Controller) Start(stopCh <-chan struct{}) {
 		return
 	}
 
-	go wait.Until(c.sync, c.interval, stopCh)
+	// wait until first successfully sync
+	// this blocks apiserver startup so poll with a short interval
+	err := wait.PollUntilContextCancel(ctx, 100*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		syncErr := c.sync()
+		return syncErr == nil, nil
+	})
+	if err != nil {
+		klog.Infof("error initializing the default ServiceCIDR: %v", err)
 
-	select {
-	case <-stopCh:
-	case <-c.readyCh:
 	}
+
+	// run the sync loop in the background with the defined interval
+	go wait.Until(func() {
+		err := c.sync()
+		if err != nil {
+			klog.Infof("error trying to sync the default ServiceCIDR: %v", err)
+		}
+	}, c.interval, stopCh)
 }
 
-func (c *Controller) sync() {
+func (c *Controller) sync() error {
 	// check if the default ServiceCIDR already exist
 	serviceCIDR, err := c.serviceCIDRLister.Get(DefaultServiceCIDRName)
 	// if exists
 	if err == nil {
-		c.setReady()
 		c.syncStatus(serviceCIDR)
-		return
+		return nil
 	}
 
 	// unknown error
 	if !apierrors.IsNotFound(err) {
-		klog.Infof("error trying to obtain the default ServiceCIDR: %v", err)
-		return
+		return err
 	}
 
 	// default ServiceCIDR does not exist
@@ -156,21 +159,11 @@ func (c *Controller) sync() {
 	}
 	serviceCIDR, err = c.client.NetworkingV1alpha1().ServiceCIDRs().Create(context.Background(), serviceCIDR, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		klog.Infof("error creating default ServiceCIDR: %v", err)
 		c.eventRecorder.Eventf(serviceCIDR, v1.EventTypeWarning, "KubernetesDefaultServiceCIDRError", "The default ServiceCIDR can not be created")
-		return
+		return err
 	}
-
-	c.setReady()
 	c.syncStatus(serviceCIDR)
-}
-
-func (c *Controller) setReady() {
-	select {
-	case <-c.readyCh:
-	default:
-		close(c.readyCh)
-	}
+	return nil
 }
 
 func (c *Controller) syncStatus(serviceCIDR *networkingapiv1alpha1.ServiceCIDR) {

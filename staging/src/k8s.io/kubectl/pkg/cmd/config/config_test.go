@@ -19,7 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -279,6 +279,91 @@ func TestEmbedClientCert(t *testing.T) {
 	test.run(t)
 }
 
+func TestExecPlugin(t *testing.T) {
+	fakeCertFile, _ := os.CreateTemp(os.TempDir(), "")
+	defer utiltesting.CloseAndRemove(t, fakeCertFile)
+	fakeData := []byte("fake-data")
+	err := os.WriteFile(fakeCertFile.Name(), fakeData, 0600)
+	if err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+	expectedConfig := newRedFederalCowHammerConfig()
+	authInfo := clientcmdapi.NewAuthInfo()
+	authInfo.Exec = &clientcmdapi.ExecConfig{
+		Command: "example-client-go-exec-plugin",
+		Args:    []string{"arg1", "arg2"},
+		Env: []clientcmdapi.ExecEnvVar{
+			{
+				Name:  "FOO",
+				Value: "bar",
+			},
+		},
+		APIVersion:         "client.authentication.k8s.io/v1",
+		ProvideClusterInfo: false,
+		InteractiveMode:    "Never",
+	}
+	expectedConfig.AuthInfos["cred-exec-user"] = authInfo
+
+	test := configCommandTest{
+		args: []string{
+			"set-credentials",
+			"cred-exec-user",
+			"--exec-api-version=client.authentication.k8s.io/v1",
+			"--exec-command=example-client-go-exec-plugin",
+			"--exec-arg=arg1,arg2",
+			"--exec-env=FOO=bar",
+			"--exec-interactive-mode=Never",
+		},
+		startingConfig: newRedFederalCowHammerConfig(),
+		expectedConfig: expectedConfig,
+	}
+
+	test.run(t)
+}
+
+func TestExecPluginWithProveClusterInfo(t *testing.T) {
+	fakeCertFile, _ := os.CreateTemp(os.TempDir(), "")
+	defer utiltesting.CloseAndRemove(t, fakeCertFile)
+	fakeData := []byte("fake-data")
+	err := os.WriteFile(fakeCertFile.Name(), fakeData, 0600)
+	if err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+	expectedConfig := newRedFederalCowHammerConfig()
+	authInfo := clientcmdapi.NewAuthInfo()
+	authInfo.Exec = &clientcmdapi.ExecConfig{
+		Command: "example-client-go-exec-plugin",
+		Args:    []string{"arg1", "arg2"},
+		Env: []clientcmdapi.ExecEnvVar{
+			{
+				Name:  "FOO",
+				Value: "bar",
+			},
+		},
+		APIVersion:         "client.authentication.k8s.io/v1",
+		ProvideClusterInfo: true,
+		InteractiveMode:    "Always",
+	}
+	expectedConfig.AuthInfos["cred-exec-user"] = authInfo
+
+	test := configCommandTest{
+		args: []string{
+			"set-credentials",
+			"cred-exec-user",
+			"--exec-api-version=client.authentication.k8s.io/v1",
+			"--exec-command=example-client-go-exec-plugin",
+			"--exec-arg=arg1,arg2",
+			"--exec-env=FOO=bar",
+			"--exec-interactive-mode=Always",
+			"--exec-provide-cluster-info=true",
+		},
+		startingConfig: newRedFederalCowHammerConfig(),
+		expectedConfig: expectedConfig,
+	}
+
+	test.run(t)
+}
+
 func TestEmbedClientKey(t *testing.T) {
 	fakeKeyFile, _ := os.CreateTemp(os.TempDir(), "")
 	defer utiltesting.CloseAndRemove(t, fakeKeyFile)
@@ -330,7 +415,7 @@ func TestEmptyTokenAndCertAllowed(t *testing.T) {
 	defer utiltesting.CloseAndRemove(t, fakeCertFile)
 	expectedConfig := newRedFederalCowHammerConfig()
 	authInfo := clientcmdapi.NewAuthInfo()
-	authInfo.ClientCertificate = path.Base(fakeCertFile.Name())
+	authInfo.ClientCertificate = filepath.Base(fakeCertFile.Name())
 	expectedConfig.AuthInfos["another-user"] = authInfo
 
 	test := configCommandTest{
@@ -575,7 +660,7 @@ func TestCAClearsInsecure(t *testing.T) {
 	clusterInfoWithInsecure.InsecureSkipTLSVerify = true
 
 	clusterInfoWithCA := clientcmdapi.NewCluster()
-	clusterInfoWithCA.CertificateAuthority = path.Base(fakeCAFile.Name())
+	clusterInfoWithCA.CertificateAuthority = filepath.Base(fakeCAFile.Name())
 
 	startingConfig := newRedFederalCowHammerConfig()
 	startingConfig.Clusters["another-cluster"] = clusterInfoWithInsecure

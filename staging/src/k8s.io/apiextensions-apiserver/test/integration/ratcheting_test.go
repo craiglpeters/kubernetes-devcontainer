@@ -31,6 +31,7 @@ import (
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch"
+
 	apiextensionsinternal "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
@@ -219,23 +220,12 @@ func (u updateMyCRDV1Beta1Schema) Do(ctx *ratchetingTestContext) error {
 		}
 
 		uuidString := string(uuid.NewUUID())
-		// UUID string is just hex separated by dashes, which is safe to
-		// throw into regex like this
-		pattern := "^" + uuidString + "$"
 		sentinelName := "__ratcheting_sentinel_field__"
 		sch.Properties[sentinelName] = apiextensionsv1.JSONSchemaProps{
-			Type:    "string",
-			Pattern: pattern,
-
-			// Put MaxLength condition inside AllOf since the string_validator
-			// in kube-openapi short circuits upon seeing MaxLength, and we
-			// want both pattern and MaxLength errors
-			AllOf: []apiextensionsv1.JSONSchemaProps{
-				{
-					MinLength: ptr((int64(1))), // 1 MinLength to prevent empty value from ever being admitted
-					MaxLength: ptr((int64(0))), // 0 MaxLength to prevent non-empty value from ever being admitted
-				},
-			},
+			Type: "string",
+			Enum: []apiextensionsv1.JSON{{
+				Raw: []byte(`"` + uuidString + `"`),
+			}},
 		}
 
 		for _, v := range myCRD.Spec.Versions {
@@ -253,7 +243,7 @@ func (u updateMyCRDV1Beta1Schema) Do(ctx *ratchetingTestContext) error {
 		}
 
 		// Keep trying to create an invalid instance of the CRD until we
-		// get an error containing the ResourceVersion we are looking for
+		// get an error containing the message we are looking for
 		//
 		counter := 0
 		return wait.PollUntilContextCancel(context.TODO(), 100*time.Millisecond, true, func(_ context.Context) (done bool, err error) {
@@ -262,8 +252,7 @@ func (u updateMyCRDV1Beta1Schema) Do(ctx *ratchetingTestContext) error {
 				gvr:  myCRDV1Beta1,
 				name: "sentinel-resource",
 				patch: map[string]interface{}{
-					// Just keep using different values
-					sentinelName: fmt.Sprintf("invalid %v %v", uuidString, counter),
+					sentinelName: fmt.Sprintf("invalid-%d", counter),
 				}}.Do(ctx)
 
 			if err == nil {
@@ -343,7 +332,7 @@ type ratchetingTestCase struct {
 }
 
 func runTests(t *testing.T, cases []ratchetingTestCase) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CRDValidationRatcheting, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CRDValidationRatcheting, true)
 	tearDown, apiExtensionClient, dynamicClient, err := fixtures.StartDefaultServerWithClients(t)
 	if err != nil {
 		t.Fatal(err)
@@ -1751,6 +1740,7 @@ func newValidator(customResourceValidation *apiextensionsinternal.JSONSchemaProp
 		sts,
 		nil, // No need for status
 		nil, // No need for scale
+		nil, // No need for selectable fields
 	)
 
 	return func(new, old *unstructured.Unstructured) {
@@ -1911,7 +1901,7 @@ func BenchmarkRatcheting(b *testing.B) {
 			name = "RatchetingDisabled"
 		}
 		b.Run(name, func(b *testing.B) {
-			defer featuregatetesting.SetFeatureGateDuringTest(b, utilfeature.DefaultFeatureGate, features.CRDValidationRatcheting, ratchetingEnabled)()
+			featuregatetesting.SetFeatureGateDuringTest(b, utilfeature.DefaultFeatureGate, features.CRDValidationRatcheting, ratchetingEnabled)
 			b.ResetTimer()
 
 			do := func(pairs []pair) {
@@ -1947,5 +1937,92 @@ func BenchmarkRatcheting(b *testing.B) {
 				}
 			})
 		})
+	}
+}
+
+func TestRatchetingDropFields(t *testing.T) {
+	// Field dropping only takes effect when feature is disabled
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CRDValidationRatcheting, false)
+	tearDown, apiExtensionClient, _, err := fixtures.StartDefaultServerWithClients(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tearDown()
+
+	group := myCRDV1Beta1.Group
+	version := myCRDV1Beta1.Version
+	resource := myCRDV1Beta1.Resource
+	kind := fakeRESTMapper[myCRDV1Beta1]
+
+	myCRD := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: resource + "." + group},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: group,
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
+				Name:    version,
+				Served:  true,
+				Storage: true,
+				Schema: &apiextensionsv1.CustomResourceValidation{
+					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]apiextensionsv1.JSONSchemaProps{
+							"spec": {
+								Type: "object",
+								Properties: map[string]apiextensionsv1.JSONSchemaProps{
+									"field": {
+										Type: "string",
+										XValidations: []apiextensionsv1.ValidationRule{
+											{
+												// Results in error if field wasn't dropped
+												Rule:            "self == oldSelf",
+												OptionalOldSelf: ptr(true),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}},
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Plural:   resource,
+				Kind:     kind,
+				ListKind: kind + "List",
+			},
+			Scope: apiextensionsv1.NamespaceScoped,
+		},
+	}
+
+	created, err := apiExtensionClient.ApiextensionsV1().CustomResourceDefinitions().Create(context.TODO(), myCRD, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["field"].XValidations[0].OptionalOldSelf != nil {
+		t.Errorf("Expected OpeiontalOldSelf field to be dropped for create when feature gate is disabled")
+	}
+
+	var updated *apiextensionsv1.CustomResourceDefinition
+	err = wait.PollUntilContextTimeout(context.TODO(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		existing, err := apiExtensionClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.TODO(), created.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		existing.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["field"].XValidations[0].OptionalOldSelf = ptr(true)
+		updated, err = apiExtensionClient.ApiextensionsV1().CustomResourceDefinitions().Update(context.TODO(), existing, metav1.UpdateOptions{})
+		if err != nil {
+			if apierrors.IsConflict(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error waiting for CRD update: %v", err)
+	}
+
+	if updated.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["field"].XValidations[0].OptionalOldSelf != nil {
+		t.Errorf("Expected OpeiontalOldSelf field to be dropped for update when feature gate is disabled")
 	}
 }

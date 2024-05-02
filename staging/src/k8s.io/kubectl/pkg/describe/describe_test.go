@@ -40,6 +40,7 @@ import (
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	storagev1alpha1 "k8s.io/api/storage/v1alpha1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +50,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 type describeClient struct {
@@ -2260,9 +2262,11 @@ func TestDescribeDeployment(t *testing.T) {
 				"Replicas:           1 desired | 0 updated | 0 total | 0 available | 0 unavailable",
 				"Image:        mytest-image:latest",
 				"Mounts:\n      /tmp/vol-bar from vol-bar (rw)\n      /tmp/vol-foo from vol-foo (rw)",
-				"OldReplicaSets:  <none>",
-				"NewReplicaSet:   bar-001 (1/1 replicas created)",
-				"Events:          <none>",
+				"OldReplicaSets:    <none>",
+				"NewReplicaSet:     bar-001 (1/1 replicas created)",
+				"Events:            <none>",
+				"Node-Selectors:  <none>",
+				"Tolerations:     <none>",
 			},
 		},
 		{
@@ -2516,8 +2520,8 @@ func TestDescribeDeployment(t *testing.T) {
 			expects: []string{
 				"Replicas:           2 desired | 1 updated | 3 total | 2 available | 1 unavailable",
 				"Image:        mytest-image:v2.0",
-				"OldReplicaSets:  bar-001 (2/2 replicas created)",
-				"NewReplicaSet:   bar-002 (1/1 replicas created)",
+				"OldReplicaSets:    bar-001 (2/2 replicas created)",
+				"NewReplicaSet:     bar-002 (1/1 replicas created)",
 				"Events:\n",
 				"Normal  ScalingReplicaSet  12m (x3 over 20m)  deployment-controller  Scaled up replica set bar-002 to 1",
 				"Normal  ScalingReplicaSet  10m                deployment-controller  Scaled up replica set bar-001 to 2",
@@ -2810,8 +2814,8 @@ func TestDescribeDeployment(t *testing.T) {
 			expects: []string{
 				"Replicas:           2 desired | 2 updated | 2 total | 2 available | 0 unavailable",
 				"Image:        mytest-image:v2.0",
-				"OldReplicaSets:  bar-001 (0/0 replicas created)",
-				"NewReplicaSet:   bar-002 (2/2 replicas created)",
+				"OldReplicaSets:    bar-001 (0/0 replicas created)",
+				"NewReplicaSet:     bar-002 (2/2 replicas created)",
 				"Events:\n",
 				"Normal  ScalingReplicaSet  12m (x3 over 20m)  deployment-controller  Scaled up replica set bar-002 to 1",
 				"Normal  ScalingReplicaSet  10m                deployment-controller  Scaled up replica set bar-001 to 2",
@@ -2844,10 +2848,11 @@ func TestDescribeDeployment(t *testing.T) {
 func TestDescribeJob(t *testing.T) {
 	indexedCompletion := batchv1.IndexedCompletion
 	cases := map[string]struct {
-		job                  *batchv1.Job
-		wantCompletedIndexes string
+		job              *batchv1.Job
+		wantElements     []string
+		dontWantElements []string
 	}{
-		"not indexed": {
+		"empty job": {
 			job: &batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "bar",
@@ -2855,8 +2860,9 @@ func TestDescribeJob(t *testing.T) {
 				},
 				Spec: batchv1.JobSpec{},
 			},
+			dontWantElements: []string{"Completed Indexes:", "Suspend:", "Backoff Limit:", "TTL Seconds After Finished:"},
 		},
-		"no indexes": {
+		"no completed indexes": {
 			job: &batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "bar",
@@ -2866,7 +2872,7 @@ func TestDescribeJob(t *testing.T) {
 					CompletionMode: &indexedCompletion,
 				},
 			},
-			wantCompletedIndexes: "<none>",
+			wantElements: []string{"Completed Indexes:  <none>"},
 		},
 		"few completed indexes": {
 			job: &batchv1.Job{
@@ -2881,7 +2887,7 @@ func TestDescribeJob(t *testing.T) {
 					CompletedIndexes: "0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32",
 				},
 			},
-			wantCompletedIndexes: "0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32",
+			wantElements: []string{"Completed Indexes:  0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32"},
 		},
 		"too many completed indexes": {
 			job: &batchv1.Job{
@@ -2896,7 +2902,37 @@ func TestDescribeJob(t *testing.T) {
 					CompletedIndexes: "0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32-34,36,37",
 				},
 			},
-			wantCompletedIndexes: "0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32-34,...",
+			wantElements: []string{"Completed Indexes:  0-5,7,9,10,12,13,15,16,18,20,21,23,24,26,27,29,30,32-34,..."},
+		},
+		"suspend set to true": {
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bar",
+					Namespace: "foo",
+				},
+				Spec: batchv1.JobSpec{
+					Suspend:                 ptr.To(true),
+					TTLSecondsAfterFinished: ptr.To(int32(123)),
+					BackoffLimit:            ptr.To(int32(1)),
+				},
+			},
+			wantElements: []string{
+				"Suspend:                     true",
+				"TTL Seconds After Finished:  123",
+				"Backoff Limit:               1",
+			},
+		},
+		"suspend set to false": {
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bar",
+					Namespace: "foo",
+				},
+				Spec: batchv1.JobSpec{
+					Suspend: ptr.To(false),
+				},
+			},
+			wantElements: []string{"Suspend:        false"},
 		},
 	}
 	for name, tc := range cases {
@@ -2909,14 +2945,19 @@ func TestDescribeJob(t *testing.T) {
 			describer := JobDescriber{Interface: client}
 			out, err := describer.Describe(tc.job.Namespace, tc.job.Name, DescriberSettings{ShowEvents: true})
 			if err != nil {
-				t.Fatalf("Unexpected error describing object: %v", err)
+				t.Fatalf("unexpected error describing object: %v", err)
 			}
-			if tc.wantCompletedIndexes != "" {
-				if !strings.Contains(out, fmt.Sprintf("Completed Indexes:  %s\n", tc.wantCompletedIndexes)) {
-					t.Errorf("Output didn't contain wanted Completed Indexes:\n%s", out)
+
+			for _, expected := range tc.wantElements {
+				if !strings.Contains(out, expected) {
+					t.Errorf("expected to find %q in output:\n %s", expected, out)
 				}
-			} else if strings.Contains(out, "Completed Indexes:") {
-				t.Errorf("Output contains unexpected completed indexes:\n%s", out)
+			}
+
+			for _, unexpected := range tc.dontWantElements {
+				if strings.Contains(out, unexpected) {
+					t.Errorf("unexpected to find %q in output:\n %s", unexpected, out)
+				}
 			}
 		})
 	}
@@ -3450,6 +3491,38 @@ func TestDescribeStorageClass(t *testing.T) {
 		!strings.Contains(out, "zone2") ||
 		!strings.Contains(out, "node2") {
 		t.Errorf("unexpected out: %s", out)
+	}
+}
+
+func TestDescribeVolumeAttributesClass(t *testing.T) {
+	expectedOut := `Name:         foo
+Annotations:  name=bar
+DriverName:   my-driver
+Parameters:   param1=value1,param2=value2
+Events:       <none>
+`
+
+	f := fake.NewSimpleClientset(&storagev1alpha1.VolumeAttributesClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "foo",
+			ResourceVersion: "4",
+			Annotations: map[string]string{
+				"name": "bar",
+			},
+		},
+		DriverName: "my-driver",
+		Parameters: map[string]string{
+			"param1": "value1",
+			"param2": "value2",
+		},
+	})
+	s := VolumeAttributesClassDescriber{f}
+	out, err := s.Describe("", "foo", DescriberSettings{ShowEvents: true})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if out != expectedOut {
+		t.Errorf("expected:\n %s\n but got output:\n %s diff:\n%s", expectedOut, out, cmp.Diff(out, expectedOut))
 	}
 }
 
@@ -5346,6 +5419,205 @@ Spec:
 						{Port: &port82, Protocol: &protoTCP},
 					},
 					From: []networkingv1.NetworkPolicyPeer{
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "pod1",
+									"id2": "pod2",
+								},
+							},
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "ns1",
+									"id2": "ns2",
+								},
+							},
+						},
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+							},
+						},
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+							},
+						},
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+								MatchExpressions: []metav1.LabelSelectorRequirement{
+									{Key: "foo", Operator: "In", Values: []string{"bar1", "bar2"}},
+								},
+							},
+						},
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR:   "192.168.0.0/16",
+								Except: []string{"192.168.3.0/24", "192.168.4.0/24"},
+							},
+						},
+					},
+				},
+				{},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+		},
+	})
+	d := NetworkPolicyDescriber{versionedFake}
+	out, err := d.Describe("default", "network-policy-1", DescriberSettings{})
+	if err != nil {
+		t.Errorf("unexpected error: %s", err)
+	}
+	if out != expectedOut {
+		t.Errorf("want:\n%s\ngot:\n%s", expectedOut, out)
+	}
+}
+
+func TestDescribeNetworkPoliciesWithPortRange(t *testing.T) {
+	expectedTime, err := time.Parse("2006-01-02 15:04:05 Z0700 MST", "2017-06-04 21:45:56 -0700 PDT")
+	if err != nil {
+		t.Errorf("unable to parse time %q error: %s", "2017-06-04 21:45:56 -0700 PDT", err)
+	}
+	expectedOut := `Name:         network-policy-1
+Namespace:    default
+Created on:   2017-06-04 21:45:56 -0700 PDT
+Labels:       <none>
+Annotations:  <none>
+Spec:
+  PodSelector:     foo in (bar1,bar2),foo2 notin (bar1,bar2),id1=app1,id2=app2
+  Allowing ingress traffic:
+    To Port Range: 80-82/TCP
+    From:
+      NamespaceSelector: id=ns1,id2=ns2
+      PodSelector: id=pod1,id2=pod2
+    From:
+      PodSelector: id=app2,id2=app3
+    From:
+      NamespaceSelector: id=app2,id2=app3
+    From:
+      NamespaceSelector: foo in (bar1,bar2),id=app2,id2=app3
+    From:
+      IPBlock:
+        CIDR: 192.168.0.0/16
+        Except: 192.168.3.0/24, 192.168.4.0/24
+    ----------
+    To Port: <any> (traffic allowed to all ports)
+    From: <any> (traffic not restricted by source)
+  Allowing egress traffic:
+    To Port Range: 80-82/TCP
+    To:
+      NamespaceSelector: id=ns1,id2=ns2
+      PodSelector: id=pod1,id2=pod2
+    To:
+      PodSelector: id=app2,id2=app3
+    To:
+      NamespaceSelector: id=app2,id2=app3
+    To:
+      NamespaceSelector: foo in (bar1,bar2),id=app2,id2=app3
+    To:
+      IPBlock:
+        CIDR: 192.168.0.0/16
+        Except: 192.168.3.0/24, 192.168.4.0/24
+    ----------
+    To Port: <any> (traffic allowed to all ports)
+    To: <any> (traffic not restricted by destination)
+  Policy Types: Ingress, Egress
+`
+
+	port80 := intstr.FromInt(80)
+	port82 := int32(82)
+	protoTCP := corev1.ProtocolTCP
+
+	versionedFake := fake.NewSimpleClientset(&networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "network-policy-1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(expectedTime),
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"id1": "app1",
+					"id2": "app2",
+				},
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "foo", Operator: "In", Values: []string{"bar1", "bar2"}},
+					{Key: "foo2", Operator: "NotIn", Values: []string{"bar1", "bar2"}},
+				},
+			},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: &port80, EndPort: &port82, Protocol: &protoTCP},
+					},
+					From: []networkingv1.NetworkPolicyPeer{
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "pod1",
+									"id2": "pod2",
+								},
+							},
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "ns1",
+									"id2": "ns2",
+								},
+							},
+						},
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+							},
+						},
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+							},
+						},
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"id":  "app2",
+									"id2": "app3",
+								},
+								MatchExpressions: []metav1.LabelSelectorRequirement{
+									{Key: "foo", Operator: "In", Values: []string{"bar1", "bar2"}},
+								},
+							},
+						},
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR:   "192.168.0.0/16",
+								Except: []string{"192.168.3.0/24", "192.168.4.0/24"},
+							},
+						},
+					},
+				},
+				{},
+			},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: &port80, EndPort: &port82, Protocol: &protoTCP},
+					},
+					To: []networkingv1.NetworkPolicyPeer{
 						{
 							PodSelector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{

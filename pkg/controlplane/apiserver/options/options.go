@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	peerreconcilers "k8s.io/apiserver/pkg/reconcilers"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
@@ -33,7 +34,6 @@ import (
 	logsapi "k8s.io/component-base/logs/api/v1"
 	"k8s.io/component-base/metrics"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/integer"
 	netutil "k8s.io/utils/net"
 
 	_ "k8s.io/kubernetes/pkg/features"
@@ -84,6 +84,8 @@ type Options struct {
 	ServiceAccountTokenMaxExpiration time.Duration
 
 	ShowHiddenMetricsForVersion string
+
+	SystemNamespaces []string
 }
 
 // completedServerRunOptions is a private wrapper that enforces a call of Complete() before Run can be invoked.
@@ -116,6 +118,7 @@ func NewOptions() *Options {
 		EnableLogsHandler:                   true,
 		EventTTL:                            1 * time.Hour,
 		AggregatorRejectForwardingRedirects: true,
+		SystemNamespaces:                    []string{metav1.NamespaceSystem, metav1.NamespacePublic, metav1.NamespaceDefault},
 	}
 
 	// Overwrite the default for storage data format.
@@ -222,6 +225,9 @@ func (o *Options) Complete(alternateDNS []string, alternateIPs []net.IP) (Comple
 		klog.Infof("external host was not specified, using %v", completed.GenericServerRunOptions.ExternalHost)
 	}
 
+	// put authorization options in final state
+	completed.Authorization.Complete()
+	// adjust authentication for completed authorization
 	completed.Authentication.ApplyAuthorization(completed.Authorization)
 
 	// Use (ServiceAccountSigningKeyFile != "") as a proxy to the user enabling
@@ -296,7 +302,7 @@ func ServiceIPRange(passedServiceClusterIPRange net.IPNet) (net.IPNet, net.IP, e
 		serviceClusterIPRange = kubeoptions.DefaultServiceIPCIDR
 	}
 
-	size := integer.Int64Min(netutil.RangeSize(&serviceClusterIPRange), 1<<16)
+	size := min(netutil.RangeSize(&serviceClusterIPRange), 1<<16)
 	if size < 8 {
 		return net.IPNet{}, net.IP{}, fmt.Errorf("the service cluster IP range must be at least %d IP addresses", 8)
 	}
